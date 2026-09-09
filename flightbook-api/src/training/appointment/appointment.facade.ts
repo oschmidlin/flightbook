@@ -190,30 +190,10 @@ export class AppointmentFacade {
         }
 
         if (appointment.subscriptions) {
-
-            // Inform waiting student
             // Only for EMC student subscription - After migrate Subscription user to student the student request can be removed
             const students = await this.studentRepository.getAppointmentActiveStudentsBySchoolId(school.id);
-            
-            let countSubscription = 0;
-            const waitingList = [];
             const studentToBeRemoved = students.find((student: Student) => student.user.id === userId);
             let freePlaces = studentToBeRemoved.getUsedPlaces();
-
-            appointment.subscriptions.forEach((subscription: Subscription) => {
-                const foundStudent = students.find((student: Student) => student.user.email === subscription.user.email);
-
-                if (appointment.maxPeople && (countSubscription + foundStudent.getUsedPlaces()) > appointment.maxPeople) {
-                    waitingList.push(foundStudent);
-                    if (freePlaces > 0 && foundStudent.getUsedPlaces() <= freePlaces) {
-                        this.emailService.sendInformWaitingStudent(school, appointment, subscription);
-                        this.notificationsService.sendInformWaitingStudent(appointment, subscription);
-                        freePlaces -= foundStudent.getUsedPlaces();
-                    }
-                } else {
-                    countSubscription += foundStudent.getUsedPlaces();
-                }
-            });
 
             const subscriptionToDelete = appointment.removeUserSubscription(userId);
             if (!subscriptionToDelete) {
@@ -221,6 +201,27 @@ export class AppointmentFacade {
             }
 
             await this.subscriptionRepository.remove(subscriptionToDelete);
+
+            let countSubscription = 0;
+            let waitingListPosition = 0;
+
+            appointment.subscriptions.forEach((subscription: Subscription) => {
+                const foundStudent = students.find((student: Student) => student.user.email === subscription.user.email);
+
+                if (appointment.maxPeople && (countSubscription + foundStudent.getUsedPlaces()) > appointment.maxPeople) {
+                    waitingListPosition++;
+                    const canParticipate = freePlaces > 0 && foundStudent.getUsedPlaces() <= freePlaces;
+                    if (canParticipate || waitingListPosition > 0) {
+                        this.emailService.sendInformWaitingStudent(school, appointment, subscription, waitingListPosition, canParticipate);
+                        this.notificationsService.sendInformWaitingStudent(appointment, subscription, waitingListPosition, canParticipate);
+                    }
+                    if (canParticipate) {
+                        freePlaces -= foundStudent.getUsedPlaces();
+                    }
+                } else {
+                    countSubscription += foundStudent.getUsedPlaces();
+                }
+            });
             this.emailService.sendUnsubscribeEmail(school, appointment, subscriptionToDelete);
         }
         return AppointmentMapper.toAppointmentDto(appointment);
