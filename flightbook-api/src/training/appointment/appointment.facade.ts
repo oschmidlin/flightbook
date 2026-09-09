@@ -192,8 +192,19 @@ export class AppointmentFacade {
         if (appointment.subscriptions) {
             // Only for EMC student subscription - After migrate Subscription user to student the student request can be removed
             const students = await this.studentRepository.getAppointmentActiveStudentsBySchoolId(school.id);
-            const studentToBeRemoved = students.find((student: Student) => student.user.id === userId);
-            let freePlaces = studentToBeRemoved.getUsedPlaces();
+            const waitingListPositions = new Map<string, number>();
+            let countSubscription = 0;
+            let waitingListPosition = 0;
+
+            appointment.subscriptions.forEach((subscription: Subscription) => {
+                const foundStudent = students.find((student: Student) => student.user.email === subscription.user.email);
+                if (appointment.maxPeople && (countSubscription + foundStudent.getUsedPlaces()) > appointment.maxPeople) {
+                    waitingListPosition++;
+                    waitingListPositions.set(subscription.user.email, waitingListPosition);
+                } else {
+                    countSubscription += foundStudent.getUsedPlaces();
+                }
+            });
 
             const subscriptionToDelete = appointment.removeUserSubscription(userId);
             if (!subscriptionToDelete) {
@@ -202,24 +213,25 @@ export class AppointmentFacade {
 
             await this.subscriptionRepository.remove(subscriptionToDelete);
 
-            let countSubscription = 0;
-            let waitingListPosition = 0;
+            countSubscription = 0;
+            waitingListPosition = 0;
 
             appointment.subscriptions.forEach((subscription: Subscription) => {
                 const foundStudent = students.find((student: Student) => student.user.email === subscription.user.email);
 
                 if (appointment.maxPeople && (countSubscription + foundStudent.getUsedPlaces()) > appointment.maxPeople) {
                     waitingListPosition++;
-                    const canParticipate = freePlaces > 0 && foundStudent.getUsedPlaces() <= freePlaces;
-                    if (canParticipate || waitingListPosition > 0) {
-                        this.emailService.sendInformWaitingStudent(school, appointment, subscription, waitingListPosition, canParticipate);
-                        this.notificationsService.sendInformWaitingStudent(appointment, subscription, waitingListPosition, canParticipate);
-                    }
-                    if (canParticipate) {
-                        freePlaces -= foundStudent.getUsedPlaces();
+                    const previousPosition = waitingListPositions.get(subscription.user.email);
+                    if (previousPosition && waitingListPosition < previousPosition) {
+                        this.emailService.sendInformWaitingStudent(school, appointment, subscription, waitingListPosition, false);
+                        this.notificationsService.sendInformWaitingStudent(appointment, subscription, waitingListPosition, false);
                     }
                 } else {
                     countSubscription += foundStudent.getUsedPlaces();
+                    if (waitingListPositions.has(subscription.user.email)) {
+                        this.emailService.sendInformWaitingStudent(school, appointment, subscription, 0, true);
+                        this.notificationsService.sendInformWaitingStudent(appointment, subscription, 0, true);
+                    }
                 }
             });
             this.emailService.sendUnsubscribeEmail(school, appointment, subscriptionToDelete);
